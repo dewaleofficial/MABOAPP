@@ -1,0 +1,20 @@
+node_modules/
+dist/
+build/
+.next/
+.turbo/
+coverage/
+
+# Environment — never commit secrets (CLAUDE.md §3.8)
+.env
+.env.local
+.env.*.local
+!.env.example
+
+.expo/
+*.log
+.DS_Store
+.vscode/
+.idea/
+supabase/.branches
+supabase/.temp
