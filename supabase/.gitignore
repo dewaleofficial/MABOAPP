@@ -1,0 +1,13 @@
+# Supabase
+.branches
+.temp
+
+# migrations is a junction to ../infra/migrations (the tracked source of
+# truth) so the CLI resolves the standard path; ignore it here so git never
+# double-tracks the same files under two paths.
+migrations
+
+# dotenvx
+.env.keys
+.env.local
+.env.*.local
