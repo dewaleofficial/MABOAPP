@@ -184,7 +184,7 @@ export interface TransitionInput {
   readonly type: OrderEventType;
   readonly actor: OrderEvent['actor'];
   readonly actorId: string;
-  readonly payload?: Record<string, unknown>;
+  readonly payload?: Record<string, unknown> | undefined;
 }
 
 export function attemptTransition(
