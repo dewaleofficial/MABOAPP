@@ -16,6 +16,7 @@
     "reflect-metadata": "^0.2.2"
   },
   "devDependencies": {
+    "@types/node": "^26.2.0",
     "@types/pg": "^8.21.0"
   }
 }
