@@ -1,0 +1,21 @@
+{
+  "name": "@provia/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "echo \"build: not yet configured\" && exit 1",
+    "start": "echo \"start: not yet configured\" && exit 1",
+    "typecheck": "tsc --noEmit -p ../../tsconfig.json",
+    "lint": "eslint src",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.2.0",
+    "pg": "^8.23.0",
+    "reflect-metadata": "^0.2.2"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.21.0"
+  }
+}
