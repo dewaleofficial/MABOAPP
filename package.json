@@ -10,7 +10,7 @@
     "build": "turbo run build",
     "dev": "turbo run dev",
     "lint": "turbo run lint",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "turbo run typecheck",
     "test": "vitest run",
     "check": "pnpm typecheck && pnpm lint && pnpm test && node scripts/check-rls.mjs",
     "db:migrate": "supabase db push",
