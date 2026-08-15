@@ -7,11 +7,12 @@
 
 import type { ServiceId, ServiceModule } from '@provia/types';
 import { laundry } from './laundry';
+import { courier } from './courier';
 
 const REGISTRY: Partial<Record<ServiceId, ServiceModule>> = {
   laundry,
+  courier,
   // carwash     — Wave 2
-  // courier     — Wave 2
   // cleaning    — Wave 2
   // marketplace — Wave 2, built last (CLAUDE.md section 2)
 };

@@ -64,7 +64,7 @@ export default tseslint.config(
   // ── Service modules may not import each other (CLAUDE.md §5) ────
   {
     files: ['packages/core/src/services/*.ts'],
-    ignores: ['packages/core/src/services/registry.ts'],
+    ignores: ['packages/core/src/services/registry.ts', 'packages/core/src/services/*.test.ts'],
     rules: {
       'no-restricted-imports': [
         'error',

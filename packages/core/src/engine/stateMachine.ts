@@ -73,6 +73,7 @@ export class MissingCodeError extends Error {
 // ─────────────────────────────────────────────────────────────
 
 const ADVANCING_EVENT: Partial<Record<string, OrderEventType>> = {
+  // ── laundry (packages/core/src/services/laundry.ts) ──
   placed: 'order.paid',
   rider_assigned: 'rider.assigned',
   rider_enroute: 'rider.arrived',
@@ -86,6 +87,24 @@ const ADVANCING_EVENT: Partial<Record<string, OrderEventType>> = {
   out_for_delivery: 'order.delivered', // delivery code — see requiresCode on the milestone
   delivered: 'qa_window.opened',
   qa_window: 'qa_window.closed',
+
+  // ── courier (packages/core/src/services/courier.ts) ──
+  // Distinct, courier_-prefixed keys — deliberately not sharing laundry's
+  // keys above, even where a courier milestone is conceptually similar
+  // (e.g. "rider arrives"), so there is no ambiguity about which service's
+  // milestone a given lookup resolves to. Reusing the same OrderEventType
+  // VALUE at two different keys (e.g. 'rider.arrived' below) is fine and
+  // already established by laundry's own out_for_delivery/logistics_qa
+  // pair above, which both resolve to 'order.delivered'.
+  courier_placed: 'order.paid',
+  courier_rider_assigned: 'rider.assigned',
+  courier_at_pickup: 'rider.arrived',
+  courier_collected: 'code.accepted', // identity code — sender's code, authorises handover
+  courier_at_dropoff: 'rider.arrived',
+  courier_delivered: 'order.delivered', // delivery code — recipient's code
+  courier_qa_window: 'qa_window.opened',
+  // courier_complete has no entry — reaching the last milestone IS
+  // completion (see deriveState's isComplete, index >= length - 1).
 };
 
 /** Events that can occur at (almost) any point and do not advance the milestone index. */
