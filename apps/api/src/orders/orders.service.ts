@@ -20,8 +20,9 @@
  * HUMAN REVIEW REQUIRED on any change to this file (CLAUDE.md §6, §8, §18).
  */
 
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import type { Pool } from 'pg';
+import { PG_POOL } from '../common/pg.token';
 import {
   attemptTransition,
   deriveState,
@@ -61,7 +62,7 @@ export class OrderNotFoundError extends Error {
 @Injectable()
 export class OrdersService {
   constructor(
-    private readonly pool: Pool,
+    @Inject(PG_POOL) private readonly pool: Pool,
     private readonly ledger: LedgerService,
   ) {}
 
@@ -171,6 +172,64 @@ export class OrdersService {
     } finally {
       db.release();
     }
+  }
+
+  /**
+   * Read-only projection of an order's current state for the GET endpoint.
+   * Derives milestone info fresh from order_events via the same pure
+   * deriveState() used by transition() — never trusts the milestone_index
+   * cache column alone, so a read is never wrong even if the cache write
+   * in transition() were ever to fall behind (it shouldn't, since it's in
+   * the same transaction, but a read path that re-derives is a cheap extra
+   * guarantee, not a cost worth skipping).
+   */
+  async getOrderProjection(orderId: string): Promise<{
+    readonly orderId: string;
+    readonly serviceId: ServiceId;
+    readonly milestoneIndex: number;
+    readonly milestoneKey: string;
+    readonly isComplete: boolean;
+  } | null> {
+    const orderRow = await this.pool.query<{ service_id: ServiceId }>(
+      `select service_id from public.orders where id = $1`,
+      [orderId],
+    );
+    const first = orderRow.rows[0];
+    if (!first) return null;
+
+    const service = getService(first.service_id);
+
+    const eventsResult = await this.pool.query<{
+      type: OrderEventType;
+      actor: OrderEvent['actor'];
+      actor_id: string;
+      payload: Record<string, unknown>;
+      at: string;
+    }>(
+      `select type, actor, actor_id, payload, at
+         from public.order_events
+        where order_id = $1
+        order by at asc`,
+      [orderId],
+    );
+    const events: OrderEvent[] = eventsResult.rows.map((r) => ({
+      orderId: orderId as OrderEvent['orderId'],
+      type: r.type,
+      actor: r.actor,
+      actorId: r.actor_id,
+      payload: r.payload,
+      at: r.at as OrderEvent['at'],
+    }));
+
+    const derived = deriveState(service, events);
+
+    return {
+      orderId,
+      serviceId: first.service_id,
+      milestoneIndex: derived.milestoneIndex,
+      milestoneKey: derived.milestoneKey,
+      isComplete: derived.isComplete,
+    };
   }
 }
 

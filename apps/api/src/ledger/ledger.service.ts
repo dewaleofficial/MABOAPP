@@ -16,8 +16,9 @@
  * HUMAN REVIEW REQUIRED on any change to this file (CLAUDE.md §8, §18).
  */
 
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import type { Pool, PoolClient } from 'pg';
+import { PG_POOL } from '../common/pg.token';
 import type { Money, LedgerAccount, BenefitFundedBy } from '@provia/types';
 
 export class UnbalancedPostingError extends Error {
@@ -65,7 +66,7 @@ export interface PostingResult {
 
 @Injectable()
 export class LedgerService {
-  constructor(private readonly pool: Pool) {}
+  constructor(@Inject(PG_POOL) private readonly pool: Pool) {}
 
   /**
    * Post a balanced set of ledger lines atomically. All lines succeed or
