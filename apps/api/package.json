@@ -2,20 +2,29 @@
   "name": "@provia/api",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
+  "type": "commonjs",
   "scripts": {
-    "build": "echo \"build: not yet configured\" && exit 1",
-    "start": "echo \"start: not yet configured\" && exit 1",
-    "typecheck": "tsc --noEmit -p ../../tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "stop": "node scripts/stop.js",
+    "typecheck": "tsc --noEmit",
     "lint": "eslint src",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@nestjs/common": "^11.2.0",
+    "@nestjs/core": "^11.2.1",
+    "@nestjs/platform-express": "^11.2.1",
+    "@provia/core": "workspace:*",
+    "@provia/types": "workspace:*",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
     "pg": "^8.23.0",
     "reflect-metadata": "^0.2.2"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^26.2.0",
     "@types/pg": "^8.21.0"
   }
