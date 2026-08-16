@@ -33,6 +33,15 @@ export const PG_POOL = Symbol('PG_POOL');
 export const SUPABASE_JWT_SECRET = Symbol('SUPABASE_JWT_SECRET');
 
 /**
+ * Same reasoning as SUPABASE_JWT_SECRET immediately above — a raw string
+ * constructor param needs an explicit token for Nest to autowire it. This
+ * one carries AuthGuard's JWKS endpoint URL (e.g. locally
+ * http://127.0.0.1:54321/auth/v1/.well-known/jwks.json), used for ES256
+ * session-token verification alongside the legacy HS256 fallback.
+ */
+export const SUPABASE_JWKS_URL = Symbol('SUPABASE_JWKS_URL');
+
+/**
  * Same root cause as PG_POOL and SUPABASE_JWT_SECRET, found a third time:
  * NestJS CONTROLLERS (registered in a module's `controllers` array) are,
  * like guards, always instantiated through their own constructor DI —

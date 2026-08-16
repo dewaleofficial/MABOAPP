@@ -14,7 +14,13 @@ import { OrdersService } from './orders/orders.service';
 import { LedgerService } from './ledger/ledger.service';
 import { PaystackController } from './payments/paystack.controller';
 import { AuthGuard } from './auth/auth.guard';
-import { PG_POOL, SUPABASE_JWT_SECRET, PAYSTACK_WEBHOOK_SECRET, PAYSTACK_VERIFY_CLIENT } from './common/pg.token';
+import {
+  PG_POOL,
+  SUPABASE_JWKS_URL,
+  SUPABASE_JWT_SECRET,
+  PAYSTACK_WEBHOOK_SECRET,
+  PAYSTACK_VERIFY_CLIENT,
+} from './common/pg.token';
 import type { PaystackVerifyClient } from './payments/paystack.webhook';
 
 function requireEnv(name: string): string {
@@ -66,6 +72,10 @@ class RealPaystackVerifyClient implements PaystackVerifyClient {
     {
       provide: SUPABASE_JWT_SECRET,
       useFactory: () => requireEnv('SUPABASE_JWT_SECRET'),
+    },
+    {
+      provide: SUPABASE_JWKS_URL,
+      useFactory: () => requireEnv('SUPABASE_JWKS_URL'),
     },
     AuthGuard,
     {
