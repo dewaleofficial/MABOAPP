@@ -33,10 +33,11 @@ import { AuthGuard, type AuthenticatedRequest } from '../auth/auth.guard';
 import {
   OrdersService,
   OrderNotFoundError,
+  BelowMinimumOrderError,
   IllegalTransitionError,
   MissingCodeError,
 } from './orders.service';
-import type { OrderEventType, ServiceId } from '@provia/types';
+import type { OrderComposition, OrderEventType, ServiceId } from '@provia/types';
 
 interface TransitionRequestBody {
   readonly type: OrderEventType;
@@ -49,10 +50,65 @@ function isTransitionRequestBody(value: unknown): value is TransitionRequestBody
   return typeof v['type'] === 'string';
 }
 
+interface CreateOrderRequestBody {
+  readonly serviceId: ServiceId;
+  readonly zoneId: string;
+  readonly composition: OrderComposition;
+}
+
+function isCreateOrderRequestBody(value: unknown): value is CreateOrderRequestBody {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v['serviceId'] === 'string' &&
+    typeof v['zoneId'] === 'string' &&
+    typeof v['composition'] === 'object' &&
+    v['composition'] !== null
+  );
+}
+
 @Controller('orders')
 @UseGuards(AuthGuard)
 export class OrdersController {
   constructor(private readonly orders: OrdersService) {}
+
+  /**
+   * POST /orders
+   *
+   * The fix for a real, previously-flagged gap: the pilot's customer app
+   * was creating orders via a direct client-side database insert with the
+   * price hardcoded to 0, because this endpoint didn't exist. The client
+   * sends an OrderComposition — what the customer wants — never a price.
+   * OrdersService.createOrder() calls the already-tested computePrice()
+   * to derive the real charge server-side (CLAUDE.md §3.9). customerId is
+   * always request.userId from the verified JWT, never a client-supplied
+   * field, same principle as transition()'s actor id below.
+   */
+  @Post()
+  @HttpCode(201)
+  async create(
+    @Body() body: unknown,
+    @Req() req: AuthenticatedRequest,
+  ): Promise<{ orderId: string; total: number; currency: string }> {
+    if (!isCreateOrderRequestBody(body)) {
+      throw new BadRequestException('Request body must include serviceId, zoneId, and composition.');
+    }
+
+    try {
+      const result = await this.orders.createOrder({
+        customerId: req.userId,
+        serviceId: body.serviceId,
+        zoneId: body.zoneId,
+        composition: body.composition,
+      });
+      return result;
+    } catch (err) {
+      if (err instanceof BelowMinimumOrderError) {
+        throw new BadRequestException(err.message);
+      }
+      throw err;
+    }
+  }
 
   /**
    * POST /orders/:id/transition

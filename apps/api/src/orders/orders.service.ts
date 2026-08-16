@@ -27,11 +27,12 @@ import {
   attemptTransition,
   deriveState,
   getService,
+  computePrice,
   IllegalTransitionError,
   MissingCodeError,
   type TransitionInput,
 } from '@provia/core';
-import type { OrderEvent, OrderEventType, ServiceId } from '@provia/types';
+import type { OrderComposition, OrderEvent, OrderEventType, ServiceId } from '@provia/types';
 import { LedgerService, type LedgerLine } from '../ledger/ledger.service';
 
 export interface TransitionRequest {
@@ -56,6 +57,20 @@ export class OrderNotFoundError extends Error {
   constructor(public readonly orderId: string) {
     super(`Order ${orderId} does not exist.`);
     this.name = 'OrderNotFoundError';
+  }
+}
+
+export class BelowMinimumOrderError extends Error {
+  constructor(
+    public readonly serviceId: string,
+    public readonly itemsSubtotal: number,
+    public readonly minimumRequired: number,
+  ) {
+    super(
+      `Order for "${serviceId}" totals ${String(itemsSubtotal)} kobo, below the ` +
+        `${String(minimumRequired)} kobo minimum for this service.`,
+    );
+    this.name = 'BelowMinimumOrderError';
   }
 }
 
@@ -166,6 +181,93 @@ export class OrdersService {
         isComplete: derived.isComplete,
         postingId,
       };
+    } catch (err) {
+      await db.query('ROLLBACK');
+      throw err;
+    } finally {
+      db.release();
+    }
+  }
+
+  /**
+   * Create a new order with a REAL, server-computed price.
+   *
+   * This is the fix for a real, previously-flagged gap: the pilot's
+   * customer app was creating orders via a direct Supabase insert with
+   * total_amount hardcoded to 0, because no order-creation endpoint
+   * existed. That meant computePrice() — built, tested, and proven
+   * yesterday — was never exercised by the pilot at all.
+   *
+   * CLAUDE.md §3.9 — the server never trusts a client-supplied price. The
+   * request body carries only an OrderComposition (what the customer
+   * wants to order); computePrice() derives the actual charge from it,
+   * server-side, using the same commission rate and margin floor used
+   * everywhere else. The client never sends, and this method never
+   * reads, anything resembling a total.
+   *
+   * Pricing inputs (commission rate, entitlements, margin floor) are
+   * hardcoded to sane pilot defaults here — commission 15%, no
+   * entitlements, a small margin floor — because there is no
+   * partner-commission-rate table or entitlement-redemption store built
+   * yet. This is a real, intentional simplification for the pilot, not a
+   * hidden shortcut: a full implementation resolves commission per
+   * partner and entitlements per customer, neither of which exists as
+   * real data yet.
+   */
+  async createOrder(request: {
+    readonly customerId: string;
+    readonly serviceId: ServiceId;
+    readonly zoneId: string;
+    readonly composition: OrderComposition;
+  }): Promise<{ readonly orderId: string; readonly total: number; readonly currency: string }> {
+    const db = await this.pool.connect();
+    try {
+      await db.query('BEGIN');
+
+      const service = getService(request.serviceId);
+
+      // The actual fix: price is computed HERE, server-side, from the
+      // composition the client submitted — never trusted as a number the
+      // client sent directly.
+      const breakdown = computePrice(
+        {
+          service,
+          composition: request.composition,
+          commission: { ratePercent: 15 }, // pilot default — see method header
+          entitlements: [], // pilot default — no entitlement store yet
+          currency: 'NGN',
+          minMargin: { amount: 50_000 as never, currency: 'NGN' }, // ₦500 floor
+        },
+        {
+          serviceId: request.serviceId,
+          orderValueSoFar: { amount: 0 as never, currency: 'NGN' },
+          redemptionsThisMonth: () => 0,
+        },
+      );
+
+      if (breakdown.belowMinimumOrder) {
+        throw new BelowMinimumOrderError(request.serviceId, breakdown.itemsSubtotal.amount, service.minimumOrderValue.amount);
+      }
+
+      const inserted = await db.query<{ id: string }>(
+        `insert into public.orders (service_id, customer_id, zone_id, total_amount, currency, details)
+         values ($1, $2, $3, $4, $5, $6)
+         returning id`,
+        [
+          request.serviceId,
+          request.customerId,
+          request.zoneId,
+          breakdown.total.amount,
+          breakdown.total.currency,
+          JSON.stringify(request.composition),
+        ],
+      );
+      const row = inserted.rows[0];
+      if (!row) throw new Error('Insert into orders returned no row — should be impossible.');
+
+      await db.query('COMMIT');
+
+      return { orderId: row.id, total: breakdown.total.amount, currency: breakdown.total.currency };
     } catch (err) {
       await db.query('ROLLBACK');
       throw err;
