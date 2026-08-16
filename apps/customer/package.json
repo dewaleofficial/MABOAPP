@@ -4,19 +4,21 @@
   "main": "index.ts",
   "private": true,
   "dependencies": {
+    "@provia/types": "workspace:*",
     "@react-navigation/native": "^7.3.16",
     "@react-navigation/native-stack": "^7.18.8",
     "@supabase/supabase-js": "^2.112.3",
     "expo": "~57.0.13",
-    "expo-constants": "~17.0.3",
-    "expo-secure-store": "~14.0.0",
+    "expo-constants": "~57.0.11",
+    "expo-secure-store": "~57.0.1",
     "expo-status-bar": "~57.0.1",
     "react": "19.2.3",
+    "react-dom": "19.2.3",
     "react-native": "0.86.2",
-    "react-native-safe-area-context": "^5.9.0",
-    "react-native-screens": "^4.27.0",
+    "react-native-safe-area-context": "^5.7.0",
+    "react-native-screens": "^4.26.2",
     "react-native-url-polyfill": "^4.0.0",
-    "@provia/types": "workspace:*"
+    "react-native-web": "^0.21.2"
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
