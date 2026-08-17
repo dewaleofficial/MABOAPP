@@ -25,6 +25,8 @@ import {
   Req,
   UseGuards,
   HttpCode,
+  HttpException,
+  HttpStatus,
   NotFoundException,
   BadRequestException,
   ConflictException,
@@ -37,7 +39,8 @@ import {
   IllegalTransitionError,
   MissingCodeError,
 } from './orders.service';
-import type { OrderComposition, OrderEventType, ServiceId } from '@provia/types';
+import { CodeMismatchError, CodeLockedOutError, NoActiveCodeError } from '../handoff-codes/handoff-codes.service';
+import type { HandoffCodeKind, OrderComposition, OrderEventType, ServiceId } from '@provia/types';
 
 interface TransitionRequestBody {
   readonly type: OrderEventType;
@@ -65,6 +68,17 @@ function isCreateOrderRequestBody(value: unknown): value is CreateOrderRequestBo
     typeof v['composition'] === 'object' &&
     v['composition'] !== null
   );
+}
+
+interface VerifyCodeRequestBody {
+  readonly kind: HandoffCodeKind;
+  readonly code: string;
+}
+
+function isVerifyCodeRequestBody(value: unknown): value is VerifyCodeRequestBody {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return typeof v['kind'] === 'string' && typeof v['code'] === 'string';
 }
 
 @Controller('orders')
@@ -185,5 +199,85 @@ export class OrdersController {
     const order = await this.orders.getOrderProjection(orderId);
     if (!order) throw new NotFoundException(`Order ${orderId} not found.`);
     return order;
+  }
+
+  /**
+   * GET /orders
+   *
+   * The partner app's order list — every order assigned to the CALLER as
+   * either the facility or logistics partner, resolved from the verified
+   * JWT's userId, never a query parameter. A partner can never list
+   * another partner's orders by guessing an id or changing a filter — the
+   * scope is fixed to "me", server-side, the same principle as
+   * transition()'s actor id.
+   */
+  @Get()
+  async list(@Req() req: AuthenticatedRequest): Promise<
+    readonly {
+      readonly orderId: string;
+      readonly serviceId: ServiceId;
+      readonly milestoneIndex: number;
+      readonly milestoneKey: string;
+      readonly isComplete: boolean;
+    }[]
+  > {
+    return this.orders.listForPartner(req.userId);
+  }
+
+  /**
+   * POST /orders/:id/handoff-code/verify
+   *
+   * CLAUDE.md §11. The rider (or facility) submits what they were told;
+   * the server checks it against the real handoff_codes row via
+   * OrdersService.transitionWithCode(), which itself calls
+   * HandoffCodesService.verify() — never re-implemented here. Domain
+   * errors map to specific, distinct statuses so the partner app can
+   * show the right thing: 409 for a genuine wrong guess (try again, N
+   * attempts left), 423 for a hard lockout (stop trying, this needs ops),
+   * 404 if there is no active code at all (nothing to verify against).
+   */
+  @Post(':id/handoff-code/verify')
+  @HttpCode(200)
+  async verifyHandoffCode(
+    @Param('id') orderId: string,
+    @Body() body: unknown,
+    @Req() req: AuthenticatedRequest,
+  ): Promise<{ orderId: string; milestoneIndex: number; milestoneKey: string; isComplete: boolean }> {
+    if (!isVerifyCodeRequestBody(body)) {
+      throw new BadRequestException('Request body must include "kind" and "code".');
+    }
+
+    try {
+      const outcome = await this.orders.transitionWithCode({
+        orderId,
+        kind: body.kind,
+        code: body.code,
+        actor: 'partner', // TODO: same real actor-kind resolution gap as transition() above
+        actorId: req.userId,
+      });
+      return {
+        orderId,
+        milestoneIndex: outcome.milestoneIndex,
+        milestoneKey: outcome.milestoneKey,
+        isComplete: outcome.isComplete,
+      };
+    } catch (err) {
+      if (err instanceof NoActiveCodeError) {
+        throw new NotFoundException(err.message);
+      }
+      if (err instanceof CodeLockedOutError) {
+        throw new HttpException(err.message, HttpStatus.LOCKED); // 423 — distinct from a retryable mismatch
+      }
+      if (err instanceof CodeMismatchError) {
+        throw new ConflictException(err.message); // 409 — wrong, but still retryable
+      }
+      if (err instanceof OrderNotFoundError) {
+        throw new NotFoundException(err.message);
+      }
+      if (err instanceof IllegalTransitionError) {
+        throw new ConflictException(err.message);
+      }
+      throw err;
+    }
   }
 }

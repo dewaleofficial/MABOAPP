@@ -32,8 +32,9 @@ import {
   MissingCodeError,
   type TransitionInput,
 } from '@provia/core';
-import type { OrderComposition, OrderEvent, OrderEventType, ServiceId } from '@provia/types';
+import type { HandoffCodeKind, OrderComposition, OrderEvent, OrderEventType, ServiceId } from '@provia/types';
 import { LedgerService, type LedgerLine } from '../ledger/ledger.service';
+import { HandoffCodesService, CodeMismatchError, CodeLockedOutError, NoActiveCodeError } from '../handoff-codes/handoff-codes.service';
 
 export interface TransitionRequest {
   readonly orderId: string;
@@ -79,6 +80,7 @@ export class OrdersService {
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly ledger: LedgerService,
+    private readonly handoffCodes: HandoffCodesService,
   ) {}
 
   /**
@@ -164,6 +166,18 @@ export class OrdersService {
         request.orderId,
       ]);
 
+      // CLAUDE.md §11 — the code is generated in this SAME transaction as
+      // the milestone event that requires it. If the newly-reached
+      // milestone declares requiresCode, the order can never sit in that
+      // state with no code to show — either both the event and the code
+      // exist, or (on any failure below) neither does.
+      const newMilestone = service.milestones[derived.milestoneIndex];
+      if (newMilestone?.requiresCode) {
+        const enteredBy =
+          newMilestone.requiresCode === 'facility' ? 'partner_facility' : 'partner_logistics';
+        await this.handoffCodes.generate(db, request.orderId, newMilestone.requiresCode, enteredBy);
+      }
+
       let postingId: string | undefined;
       if (request.ledgerLines && request.ledgerLines.length > 0) {
         // Same transaction (`db` is passed through) — the ledger posting and
@@ -187,6 +201,77 @@ export class OrdersService {
     } finally {
       db.release();
     }
+  }
+
+  /**
+   * Verify a handoff code and, on success, advance the order past the
+   * milestone that required it — same outcome shape as transition().
+   *
+   * DELIBERATELY TWO SEPARATE TRANSACTIONS, not one — this is a reasoned
+   * exception to the "everything atomic together" pattern used
+   * everywhere else in this file, and it matters:
+   *
+   *   Phase 1 verifies the code in its OWN transaction. A WRONG guess
+   *   decrements attempts_remaining and that decrement must durably
+   *   persist even though nothing else happens — if verification were
+   *   nested inside the same transaction as the eventual milestone
+   *   advance, a caller who then aborted (or a wrong-code path that
+   *   never reaches an advance at all) would roll the decrement back
+   *   too, silently resetting the attack surface an attacker could keep
+   *   retrying. The lockout in HandoffCodesService.verify() only works
+   *   if wrong attempts are permanently recorded.
+   *
+   *   Phase 2 (only reached if phase 1's code was CORRECT) runs the
+   *   normal transition() — the code.accepted event, the milestone
+   *   advance, and any ledger posting, atomic together exactly as usual.
+   */
+  async transitionWithCode(request: {
+    readonly orderId: string;
+    readonly kind: HandoffCodeKind;
+    readonly code: string;
+    readonly actor: OrderEvent['actor'];
+    readonly actorId: string;
+  }): Promise<TransitionOutcome> {
+    const verifyClient = await this.pool.connect();
+    try {
+      await verifyClient.query('BEGIN');
+      // Row lock inside verify() serialises concurrent attempts; on a
+      // wrong guess it ALSO writes the decremented attempts_remaining
+      // before throwing — that write must be COMMITTED, not rolled back,
+      // or the lockout mechanism silently does nothing (a bug caught by
+      // this file's own test suite: see the "wrong code decrements" and
+      // "3 attempts locks out" tests).
+      await this.handoffCodes.verify(verifyClient, request.orderId, request.kind, request.code);
+      await verifyClient.query('COMMIT');
+    } catch (err) {
+      if (
+        err instanceof CodeMismatchError ||
+        err instanceof CodeLockedOutError ||
+        err instanceof NoActiveCodeError
+      ) {
+        // A known, expected business-logic outcome — verify() may have
+        // already written a real state change (the decrement) that must
+        // survive. Commit what happened, then propagate the error.
+        await verifyClient.query('COMMIT');
+        throw err;
+      }
+      // Anything else (a genuine DB/connection failure) really should be
+      // rolled back — nothing about it is a legitimate outcome to keep.
+      await verifyClient.query('ROLLBACK');
+      throw err;
+    } finally {
+      verifyClient.release();
+    }
+
+    // Phase 2 — code was correct. Advance the order normally; this is
+    // the exact same atomic path as any other transition.
+    return this.transition({
+      orderId: request.orderId,
+      type: 'code.accepted',
+      actor: request.actor,
+      actorId: request.actorId,
+      payload: { kind: request.kind },
+    });
   }
 
   /**
@@ -332,6 +417,56 @@ export class OrdersService {
       milestoneKey: derived.milestoneKey,
       isComplete: derived.isComplete,
     };
+  }
+
+  /**
+   * Every order assigned to this partner, as either the facility or
+   * logistics side — resolved from their auth_user_id (the JWT's
+   * verified userId), never a client-supplied partner id. This is the
+   * partner app's real order list. RLS on `orders` (0001_foundation.sql)
+   * enforces the same scope at the database level as a second layer,
+   * matching the defence-in-depth principle already documented on
+   * getOrderProjection above.
+   *
+   * Each row's milestone info is re-derived fresh, same as
+   * getOrderProjection — a list is not a shortcut that trusts the cache
+   * column alone either.
+   */
+  async listForPartner(authUserId: string): Promise<
+    readonly {
+      readonly orderId: string;
+      readonly serviceId: ServiceId;
+      readonly milestoneIndex: number;
+      readonly milestoneKey: string;
+      readonly isComplete: boolean;
+    }[]
+  > {
+    const partnerRow = await this.pool.query<{ id: string }>(
+      `select id from public.partners where auth_user_id = $1`,
+      [authUserId],
+    );
+    const partner = partnerRow.rows[0];
+    if (!partner) return []; // not a partner account — nothing assigned, not an error
+
+    const orderRows = await this.pool.query<{ id: string; service_id: ServiceId }>(
+      `select id, service_id from public.orders
+        where facility_partner_id = $1 or logistics_partner_id = $1
+        order by created_at desc`,
+      [partner.id],
+    );
+
+    const results = await Promise.all(
+      orderRows.rows.map(async (row) => {
+        const projection = await this.getOrderProjection(row.id);
+        // getOrderProjection cannot return null here — we just selected
+        // this id from orders directly — but the type is nullable for its
+        // other (client-supplied-id) call site, so narrow explicitly
+        // rather than asserting.
+        if (!projection) throw new Error(`Order ${row.id} vanished between list and projection — should be impossible.`);
+        return projection;
+      }),
+    );
+    return results;
   }
 }
 

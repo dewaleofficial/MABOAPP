@@ -12,6 +12,7 @@ import { Pool } from 'pg';
 import { OrdersController } from './orders/orders.controller';
 import { OrdersService } from './orders/orders.service';
 import { LedgerService } from './ledger/ledger.service';
+import { HandoffCodesService } from './handoff-codes/handoff-codes.service';
 import { PaystackController } from './payments/paystack.controller';
 import { AuthGuard } from './auth/auth.guard';
 import {
@@ -68,6 +69,7 @@ class RealPaystackVerifyClient implements PaystackVerifyClient {
       useFactory: () => new Pool({ connectionString: requireEnv('DATABASE_URL') }),
     },
     LedgerService,
+    HandoffCodesService,
     OrdersService,
     {
       provide: SUPABASE_JWT_SECRET,
