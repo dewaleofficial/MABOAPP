@@ -17,6 +17,7 @@ import { Pool } from 'pg';
 import { money } from '@provia/types';
 import { OrdersService, OrderNotFoundError, IllegalTransitionError } from './orders.service';
 import { LedgerService, UnbalancedPostingError } from '../ledger/ledger.service';
+import { HandoffCodesService } from '../handoff-codes/handoff-codes.service';
 
 /**
  * Test-only helper: extract the first row of a query result without a
@@ -47,7 +48,7 @@ describeIfDb('OrdersService + LedgerService — real Postgres integration', () =
   beforeAll(async () => {
     pool = new Pool({ connectionString: DATABASE_URL });
     ledger = new LedgerService(pool);
-    orders = new OrdersService(pool, ledger);
+    orders = new OrdersService(pool, ledger, new HandoffCodesService());
 
     const customer = await pool.query<{ id: string }>(
       `insert into auth.users (id, email) values (gen_random_uuid(), $1) returning id`,
