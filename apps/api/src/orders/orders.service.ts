@@ -334,13 +334,46 @@ export class OrdersService {
         throw new BelowMinimumOrderError(request.serviceId, breakdown.itemsSubtotal.amount, service.minimumOrderValue.amount);
       }
 
+      // ============================================================
+      // PILOT-SCOPE AUTO-ASSIGNMENT — real, explicit, deliberately dumb.
+      // ============================================================
+      // Confirmed with the founder: "Yes for now, auto-assign. no
+      // approved matching logic for now." This is NOT the real matching
+      // engine described in CLAUDE.md §13 (QA score, specialisation,
+      // capacity, fairness rotation) — that's real future work. This
+      // assigns the ONE pilot partner to every order, unconditionally.
+      //
+      // PILOT_PARTNER_ID comes from an environment variable, not a
+      // hardcoded literal like PILOT_ZONE_ID — the zone could be seeded
+      // ahead of time (infra/seed/zones.sql), but the pilot partner's
+      // real id doesn't exist until their actual Supabase user and
+      // partners row are created, which happens as part of onboarding
+      // them, not at build time.
+      //
+      // Laundry needs BOTH a facility leg and a logistics leg — the
+      // single pilot partner fills both roles, matching CLAUDE.md §13's
+      // note that one partner account can hold multiple capabilities.
+      // Courier has no facility leg at all (CLAUDE.md §2's dropped
+      // milestones 5–8), so only logistics_partner_id is set for it.
+      const pilotPartnerId = process.env['PILOT_PARTNER_ID'];
+      if (!pilotPartnerId) {
+        throw new Error(
+          'PILOT_PARTNER_ID is not set. This pilot-scope auto-assignment ' +
+            'requires a real partner id — see the comment above this check.',
+        );
+      }
+      const facilityPartnerId = request.serviceId === 'courier' ? null : pilotPartnerId;
+      const logisticsPartnerId = pilotPartnerId;
+
       const inserted = await db.query<{ id: string }>(
-        `insert into public.orders (service_id, customer_id, zone_id, total_amount, currency, details)
-         values ($1, $2, $3, $4, $5, $6)
+        `insert into public.orders (service_id, customer_id, facility_partner_id, logistics_partner_id, zone_id, total_amount, currency, details)
+         values ($1, $2, $3, $4, $5, $6, $7, $8)
          returning id`,
         [
           request.serviceId,
           request.customerId,
+          facilityPartnerId,
+          logisticsPartnerId,
           request.zoneId,
           breakdown.total.amount,
           breakdown.total.currency,
