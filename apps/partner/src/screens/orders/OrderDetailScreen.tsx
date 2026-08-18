@@ -41,21 +41,22 @@ const NEXT_ACTION: Record<
   string,
   { label: string; type: OrderEventType; requiresCode?: HandoffCodeKind }
 > = {
-  rider_assigned: { label: 'Mark en route', type: 'rider.arrived' },
+  rider_assigned: { label: 'Mark en route', type: 'rider.assigned' },
   rider_enroute: { label: "I've arrived", type: 'rider.arrived' },
   rider_arrived: { label: 'Enter customer code', type: 'code.accepted', requiresCode: 'identity' },
   count_verified: { label: 'Seal bag', type: 'bag.sealed' },
-  bag_sealed: { label: 'Enter facility code', type: 'facility.received', requiresCode: 'facility' },
-  facility_received: { label: 'Start cleaning', type: 'facility.qa_passed' },
+  bag_sealed: { label: 'Enter release code', type: 'facility.received', requiresCode: 'release' },
+  facility_received: { label: 'Enter facility code', type: 'facility.qa_passed', requiresCode: 'facility' },
   facility_working: { label: 'Mark QA passed', type: 'facility.qa_passed' },
   facility_qa: { label: 'Rider: mark collected', type: 'logistics.qa_passed' },
   logistics_qa: { label: 'Out for delivery', type: 'order.delivered' },
   out_for_delivery: { label: "I've arrived", type: 'order.delivered' },
-  delivered: { label: 'Enter delivery code', type: 'code.accepted', requiresCode: 'delivery' },
-  courier_rider_assigned: { label: 'Mark en route to sender', type: 'rider.arrived' },
-  courier_at_pickup: { label: 'Enter sender code', type: 'code.accepted', requiresCode: 'identity' },
-  courier_collected: { label: "I've arrived at recipient", type: 'rider.arrived' },
-  courier_at_dropoff: { label: 'Enter recipient code', type: 'code.accepted', requiresCode: 'delivery' },
+  delivered: { label: 'Enter delivery code', type: 'qa_window.opened', requiresCode: 'delivery' },
+  courier_rider_assigned: { label: 'Mark en route to sender', type: 'rider.assigned' },
+  courier_at_pickup: { label: "I've arrived", type: 'rider.arrived' },
+  courier_collected: { label: 'Enter sender code', type: 'code.accepted', requiresCode: 'identity' },
+  courier_at_dropoff: { label: "I've arrived at recipient", type: 'rider.arrived' },
+  courier_delivered: { label: 'Enter recipient code', type: 'order.delivered', requiresCode: 'delivery' },
 };
 
 const MILESTONE_LABELS: Record<string, string> = {
