@@ -183,6 +183,74 @@ describeIfDb('OrdersService + HandoffCodesService — real end-to-end', () => {
     expect(event.rows).toHaveLength(1);
   });
 
+  it('transitionWithCode: a code that GATES a different advancing event (bag_sealed → facility.received) advances in one call, records both events, and generates no duplicate code', async () => {
+    const orderId = await makeOrder();
+    await orders.transition({ orderId, type: 'order.paid', actor: 'system', actorId: 'system' });
+    await orders.transition({ orderId, type: 'rider.assigned', actor: 'system', actorId: 'system' });
+    await orders.transition({ orderId, type: 'rider.arrived', actor: 'partner', actorId: logisticsPartnerAuthId });
+
+    const identityCode = await pool.query<{ code: string }>(
+      `select code from public.handoff_codes where order_id = $1 and kind = 'identity' and consumed_at is null`,
+      [orderId],
+    );
+    await orders.transitionWithCode({
+      orderId,
+      kind: 'identity',
+      code: firstRow(identityCode, 'select handoff_codes.code (identity)').code,
+      actor: 'partner',
+      actorId: logisticsPartnerAuthId,
+    });
+
+    // count_verified → bag_sealed. bag_sealed requiresCode: 'release', and
+    // this IS a genuine forward advance, so a real release code is
+    // generated here, exactly as rider_arrived's identity code was above.
+    const bagSealed = await orders.transition({ orderId, type: 'bag.sealed', actor: 'partner', actorId: logisticsPartnerAuthId });
+    expect(bagSealed.milestoneKey).toBe('bag_sealed');
+
+    const releaseCode = await pool.query<{ code: string }>(
+      `select code from public.handoff_codes where order_id = $1 and kind = 'release' and consumed_at is null`,
+      [orderId],
+    );
+    const realReleaseCode = firstRow(releaseCode, 'select handoff_codes.code (release)').code;
+
+    // The real bug: bag_sealed's requiresCode ('release') gates a
+    // DIFFERENT advancing event ('facility.received'), not code.accepted
+    // itself. This single call must both record the code AND advance past
+    // bag_sealed — not silently consume the code while leaving the order
+    // stuck, and not throw.
+    const outcome = await orders.transitionWithCode({
+      orderId,
+      kind: 'release',
+      code: realReleaseCode,
+      actor: 'partner',
+      actorId: logisticsPartnerAuthId,
+    });
+    expect(outcome.milestoneKey).toBe('facility_received');
+
+    // Both events genuinely exist in the append-only log — not just
+    // claimed by the return value.
+    const codeAcceptedRelease = await pool.query<{ type: string }>(
+      `select type from public.order_events where order_id = $1 and type = 'code.accepted' and payload->>'kind' = 'release'`,
+      [orderId],
+    );
+    expect(codeAcceptedRelease.rows).toHaveLength(1);
+
+    const facilityReceived = await pool.query<{ type: string }>(
+      `select type from public.order_events where order_id = $1 and type = 'facility.received'`,
+      [orderId],
+    );
+    expect(facilityReceived.rows).toHaveLength(1);
+
+    // No spurious duplicate release code was minted by the code-recording
+    // step that leaves milestoneIndex unchanged — exactly one release-kind
+    // row for this order, ever (consumed or not).
+    const allReleaseCodes = await pool.query<{ id: string }>(
+      `select id from public.handoff_codes where order_id = $1 and kind = 'release'`,
+      [orderId],
+    );
+    expect(allReleaseCodes.rows).toHaveLength(1);
+  });
+
   it('3 wrong attempts locks the order — a 4th attempt with the correct code STILL fails', async () => {
     const orderId = await makeOrder();
     await orders.transition({ orderId, type: 'order.paid', actor: 'system', actorId: 'system' });

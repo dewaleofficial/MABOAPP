@@ -107,6 +107,18 @@ const ADVANCING_EVENT: Partial<Record<string, OrderEventType>> = {
   // completion (see deriveState's isComplete, index >= length - 1).
 };
 
+/**
+ * Read-only accessor for ADVANCING_EVENT — lets callers outside this module
+ * (OrdersService.transitionWithCode) determine what event actually advances
+ * a given milestone, without duplicating this map or reaching into
+ * module-private state. Keyed purely by milestone key, same as the map
+ * itself — no service parameter needed, since ADVANCING_EVENT is already
+ * shared/flat across every service's milestone keys.
+ */
+export function getAdvancingEvent(milestoneKey: string): OrderEventType | undefined {
+  return ADVANCING_EVENT[milestoneKey];
+}
+
 /** Events that can occur at (almost) any point and do not advance the milestone index. */
 const SIDE_EVENTS: readonly OrderEventType[] = [
   'count.disputed',
@@ -242,7 +254,22 @@ export function attemptTransition(
   }
 
   const expected = ADVANCING_EVENT[currentMilestone.key];
-  if (input.type !== expected) {
+
+  // A code.accepted event matching THIS milestone's own requiresCode kind
+  // is always legal to record, even when it isn't the milestone's own
+  // advancing event (e.g. bag_sealed's requiresCode is 'release' but its
+  // advancing event is 'facility.received') — it satisfies a LATER attempt
+  // at the real advancing event's requiresCode gate below. It never
+  // advances the milestone by itself: deriveState only increments index on
+  // event.type === expected, and this event's type is 'code.accepted',
+  // which only equals expected at milestones where they're the same thing
+  // (e.g. rider_arrived).
+  const isCodeRecordingForThisMilestone =
+    input.type === 'code.accepted' &&
+    currentMilestone.requiresCode !== undefined &&
+    input.payload?.['kind'] === currentMilestone.requiresCode;
+
+  if (input.type !== expected && !isCodeRecordingForThisMilestone) {
     throw new IllegalTransitionError(
       input.orderId,
       input.type,

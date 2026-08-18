@@ -27,6 +27,7 @@ import {
   attemptTransition,
   deriveState,
   getService,
+  getAdvancingEvent,
   computePrice,
   IllegalTransitionError,
   MissingCodeError,
@@ -159,6 +160,7 @@ export class OrdersService {
       );
       void inserted; // id not currently surfaced to the caller; kept for future audit linkage
 
+      const priorMilestoneIndex = deriveState(service, priorEvents).milestoneIndex;
       const derived = deriveState(service, [...priorEvents, newEvent]);
 
       await db.query(`update public.orders set milestone_index = $1, updated_at = now() where id = $2`, [
@@ -171,8 +173,17 @@ export class OrdersService {
       // milestone declares requiresCode, the order can never sit in that
       // state with no code to show — either both the event and the code
       // exist, or (on any failure below) neither does.
+      //
+      // Gated on a GENUINE forward advance (derived.milestoneIndex >
+      // priorMilestoneIndex), not merely "the milestone landed on requires
+      // a code" — otherwise a code-recording event that leaves
+      // milestoneIndex unchanged (see stateMachine.ts's
+      // isCodeRecordingForThisMilestone) would re-mint a fresh code for a
+      // milestone whose code was already generated when it was first
+      // reached, and whose current code the caller is in the middle of
+      // consuming right now.
       const newMilestone = service.milestones[derived.milestoneIndex];
-      if (newMilestone?.requiresCode) {
+      if (derived.milestoneIndex > priorMilestoneIndex && newMilestone?.requiresCode) {
         const enteredBy =
           newMilestone.requiresCode === 'facility' ? 'partner_facility' : 'partner_logistics';
         await this.handoffCodes.generate(db, request.orderId, newMilestone.requiresCode, enteredBy);
@@ -263,15 +274,44 @@ export class OrdersService {
       verifyClient.release();
     }
 
-    // Phase 2 — code was correct. Advance the order normally; this is
-    // the exact same atomic path as any other transition.
-    return this.transition({
+    // Phase 2a — record the code as an event. At a milestone where
+    // code.accepted IS the milestone's own advancing event (rider_arrived,
+    // courier_collected), this call alone advances the order past it —
+    // identical to the old single-call behavior. At a milestone where
+    // requiresCode merely GATES a different advancing event (bag_sealed,
+    // facility_received, delivered, courier_delivered), stateMachine.ts's
+    // isCodeRecordingForThisMilestone permits this event to be recorded
+    // WITHOUT advancing — milestoneKey comes back unchanged.
+    const before = await this.getOrderProjection(request.orderId);
+    if (!before) throw new OrderNotFoundError(request.orderId);
+
+    const afterCode = await this.transition({
       orderId: request.orderId,
       type: 'code.accepted',
       actor: request.actor,
       actorId: request.actorId,
       payload: { kind: request.kind },
     });
+
+    if (afterCode.milestoneKey === before.milestoneKey) {
+      // Recording-only — code.accepted did not advance the milestone (the
+      // key is unchanged from before phase 2a). Fire the milestone's REAL
+      // advancing event now that codesAccepted satisfies its requiresCode
+      // gate. If milestoneKey DID change above, code.accepted was itself
+      // the advancing event — nothing more to do, matching the pre-fix
+      // behavior exactly for rider_arrived/courier_collected.
+      const advancingType = getAdvancingEvent(afterCode.milestoneKey);
+      if (advancingType && advancingType !== 'code.accepted') {
+        return this.transition({
+          orderId: request.orderId,
+          type: advancingType,
+          actor: request.actor,
+          actorId: request.actorId,
+          payload: {},
+        });
+      }
+    }
+    return afterCode;
   }
 
   /**

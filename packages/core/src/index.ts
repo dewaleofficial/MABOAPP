@@ -15,6 +15,7 @@ export type { ServiceModule } from '@provia/types';
 export {
   deriveState,
   attemptTransition,
+  getAdvancingEvent,
   projectOrderState,
   IllegalTransitionError,
   MissingCodeError,
